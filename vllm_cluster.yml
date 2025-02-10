@@ -1,0 +1,64 @@
+---
+- name: Deploy VLLM Cluster
+  hosts: all
+  become: true
+  tasks:
+
+    - name: Create run_cluster.sh script
+      copy:
+        content: |
+          #!/bin/bash
+
+          if [ $# -lt 4 ]; then
+              echo "Usage: $0 docker_image head_node_address --head|--worker path_to_hf_home [additional_args...]"
+              exit 1
+          fi
+
+          DOCKER_IMAGE="$1"
+          HEAD_NODE_ADDRESS="$2"
+          NODE_TYPE="$3"
+          PATH_TO_HF_HOME="$4"
+          shift 4
+          ADDITIONAL_ARGS=("$@")
+
+          if [ "${NODE_TYPE}" != "--head" ] && [ "${NODE_TYPE}" != "--worker" ]; then
+              echo "Error: Node type must be --head or --worker"
+              exit 1
+          fi
+
+          cleanup() {
+              docker stop node
+              docker rm node
+          }
+          trap cleanup EXIT
+
+          RAY_START_CMD="ray start --block"
+          [ "${NODE_TYPE}" == "--head" ] && RAY_START_CMD+=" --head --port=6379" || RAY_START_CMD+=" --address=${HEAD_NODE_ADDRESS}:6379"
+
+          docker run --entrypoint /bin/bash --network host --name node --shm-size 10.24g --gpus all \
+              -v "${PATH_TO_HF_HOME}:/root/.cache/huggingface" "${ADDITIONAL_ARGS[@]}" "${DOCKER_IMAGE}" -c "${RAY_START_CMD}"
+        dest: /root/run_cluster.sh
+        mode: '0755'
+
+    - name: Ensure no existing container with name "node" is running
+      shell: |
+        if docker ps -a --filter "name=node" -q; then
+          docker stop node || true
+          docker rm node || true
+        fi
+      ignore_errors: yes
+
+    - name: Start or attach to tmux session for Ray
+      shell: |
+        if tmux has-session -t ray 2>/dev/null; then
+          tmux kill-session -t ray  # Kill existing session
+        fi
+        tmux new-session -d -s ray "bash /root/run_cluster.sh vllm/vllm-openai:v0.7.1 10.1.0.11 {{ '--head' if inventory_hostname in groups['head'] else '--worker' }} /root/.cache/huggingface --privileged -e NCCL_IB_HCA='mlx5_0,mlx5_1,mlx5_2,mlx5_3,mlx5_4,mlx5_5,mlx5_6,mlx5_7' -e VLLM_HOST_IP={{ '10.1.0.11' if inventory_hostname in groups['head'] else '10.1.0.12' }} -e USE_RDMA='true'; bash"
+
+    - name: Start or attach to tmux session for VLLM on head node
+      shell: |
+        if tmux has-session -t vllm 2>/dev/null; then
+          tmux kill-session -t vllm  # Kill existing session
+        fi
+        tmux new-session -d -s vllm "docker exec -it node /bin/bash -c 'NCCL_DEBUG=TRACE vllm serve deepseek-ai/DeepSeek-R1 --tensor-parallel-size 8 --pipeline-parallel-size 2 --trust-remote-code --max-model-len 32000; bash'"
+      when: inventory_hostname in groups['head']
