@@ -1,0 +1,37 @@
+---
+- name: Deploy SGLang Cluster
+  hosts: all
+  become: true
+  tasks:
+
+    - name: Ensure no existing container with name "sglang_multinode" is running
+      shell: |
+        if docker ps -a --filter "name=sglang_multinode" -q; then
+          docker stop sglang_multinode || true
+          docker rm sglang_multinode || true
+        fi
+      ignore_errors: yes
+
+    - name: Start SGLang on head node
+      shell: |
+        sudo docker run --gpus=all --shm-size=32g --network=host \
+        -v /root/.cache/huggingface:/root/.cache/huggingface \
+        --name sglang_multinode -d --ipc=host --restart always --privileged \
+        -e NCCL_DEBUG=TRACE -e NCCL_IB_HCA=mlx5_0,mlx5_1,mlx5_2,mlx5_3,mlx5_4,mlx5_5,mlx5_6,mlx5_7 \
+        -e USE_RDMA=true lmsysorg/sglang:latest \
+        python3 -m sglang.launch_server --model-path deepseek-ai/DeepSeek-R1 \
+        --tp 16 --dist-init-addr {{ groups['head'][0] }}:20000 --nnodes 2 --node-rank 0 \
+        --trust-remote-code --host 0.0.0.0 --port 8000
+      when: inventory_hostname in groups['head']
+
+    - name: Start SGLang on worker node
+      shell: |
+        sudo docker run --gpus=all --shm-size=32g --network=host \
+        -v /root/.cache/huggingface:/root/.cache/huggingface \
+        --name sglang_multinode -d --ipc=host --restart always --privileged \
+        -e NCCL_DEBUG=TRACE -e NCCL_IB_HCA=mlx5_0,mlx5_1,mlx5_2,mlx5_3,mlx5_4,mlx5_5,mlx5_6,mlx5_7 \
+        -e USE_RDMA=true lmsysorg/sglang:latest \
+        python3 -m sglang.launch_server --model-path deepseek-ai/DeepSeek-R1 \
+        --tp 16 --dist-init-addr {{ groups['head'][0] }}:20000 --nnodes 2 --node-rank 1 \
+        --trust-remote-code --host 0.0.0.0 --port 8000
+      when: inventory_hostname in groups['workers']
