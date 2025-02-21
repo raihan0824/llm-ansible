@@ -50,17 +50,12 @@
 
     - name: Start Ray session
       shell: |
-        bash /root/run_cluster.sh vllm/vllm-openai:v0.7.1 10.1.0.11 {{ '--head' if inventory_hostname in groups['head'] else '--worker' }} /root/.cache/huggingface --privileged -e NCCL_IB_HCA='mlx5_0,mlx5_1,mlx5_2,mlx5_3,mlx5_4,mlx5_5,mlx5_6,mlx5_7' -e VLLM_HOST_IP={{ '10.1.0.11' if inventory_hostname in groups['head'] else '10.1.0.12' }} -e USE_RDMA='true'
-
-    # - name: Ensure the container is running
-    #   shell: docker ps -a --filter "name=node" -q
-    #   register: container_id
-    #   when: inventory_hostname in groups['head']
+        bash /root/run_cluster.sh vllm/vllm-openai:v0.7.3 {{ groups['head'][0] }} {{ '--head' if inventory_hostname in groups['head'] else '--worker' }} /root/.cache/huggingface --privileged -e NCCL_IB_HCA='mlx5_0,mlx5_1,mlx5_2,mlx5_3,mlx5_4,mlx5_5,mlx5_6,mlx5_7' -e VLLM_HOST_IP={{ groups['head'][0] if inventory_hostname in groups['head'] else groups['workers'][0] }} -e USE_RDMA='true'
       
     - name: Start VLLM on head node
       shell: |
-        docker exec -d node /bin/bash -c 'nohup vllm serve deepseek-ai/DeepSeek-R1 \
-        --tensor-parallel-size 8 --pipeline-parallel-size 2 --trust-remote-code \
-        --max-model-len 32000 > /root/vllm.log 2>&1 &'
+        docker exec -d node /bin/bash -c 'NCCL_DEBUG=TRACE nohup vllm serve deepseek-ai/DeepSeek-R1 \
+        --tensor-parallel-size 16 --pipeline-parallel-size 1 --trust-remote-code \
+        --max-model-len 32768 --gpu-memory-utilization 0.9 --enable-prefix-caching > /root/vllm.log 2>&1 &'
       when: inventory_hostname in groups['head']
 
