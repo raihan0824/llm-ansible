@@ -1,0 +1,9 @@
+[head]
+192.168.1.10 ansible_user=root ansible_ssh_pass=MockPassword123
+
+[workers]
+192.168.1.11 ansible_user=root ansible_ssh_pass=MockPassword123
+
+[all:vars]
+ansible_ssh_common_args='-o StrictHostKeyChecking=no -o PreferredAuthentications=password'
+ansible_connection=ssh
